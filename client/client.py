@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-TCP-Nexus - WhatsApp-inspired Tkinter Client
-Standard library only.
-"""
-
 import argparse
 import json
 import queue
@@ -14,9 +8,13 @@ from datetime import datetime
 from tkinter import messagebox, simpledialog
 
 
+# ============================================================
+# Theme
+# ============================================================
+
 APP_BG = "#0B141A"
 SIDEBAR_BG = "#111B21"
-PANEL_BG = "#202C33"
+HEADER_BG = "#202C33"
 INPUT_BG = "#2A3942"
 TEXT = "#E9EDEF"
 MUTED = "#8696A0"
@@ -25,346 +23,863 @@ OWN_BUBBLE = "#005C4B"
 OTHER_BUBBLE = "#202C33"
 SYSTEM_BG = "#182229"
 DANGER = "#EA5B64"
+MENU_BG = "#233138"
 
 
-class TCPNexusClient:
-    def __init__(self, root, host="127.0.0.1", port=5000):
+class TCPNexusGUI:
+    def __init__(
+        self,
+        root,
+        host="127.0.0.1",
+        port=5000
+    ):
         self.root = root
         self.host = host
         self.port = port
+
         self.sock = None
         self.running = threading.Event()
-        self.recv_thread = None
         self.incoming = queue.Queue()
 
         self.username = ""
         self.current_room = None
+
+        self.chat_mode = "room"
+        self.private_user = None
+
         self.rooms = {}
         self.users = []
-        self.active_private_user = None
-        self.chat_mode = "room"  # room | private
+
+        # message_id -> visible widget data
+        self.message_widgets = {}
+
+        # Context history during this client session
+        self.room_messages = {}
+        self.private_messages = {}
 
         self.root.title("TCP-Nexus")
-        self.root.geometry("1180x720")
-        self.root.minsize(960, 620)
+        self.root.geometry("1200x760")
+        self.root.minsize(980, 620)
         self.root.configure(bg=APP_BG)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.build_login()
-        self.root.after(80, self.process_incoming)
 
-    # ---------------- UI helpers ----------------
+        # Process network events safely on Tkinter main thread
+        self.root.after(70, self.process_incoming)
+
+    # ============================================================
+    # Generic UI
+    # ============================================================
+
     def clear_root(self):
         for widget in self.root.winfo_children():
             widget.destroy()
+
+    # ============================================================
+    # Login Screen
+    # ============================================================
 
     def build_login(self):
         self.clear_root()
         self.root.configure(bg=APP_BG)
 
-        shell = tk.Frame(self.root, bg=APP_BG)
-        shell.pack(fill="both", expand=True)
-
-        card = tk.Frame(shell, bg=SIDEBAR_BG, bd=0, highlightthickness=0)
-        card.place(relx=0.5, rely=0.5, anchor="center", width=430, height=510)
-
-        tk.Label(
-            card, text="TCP-Nexus", bg=SIDEBAR_BG, fg=TEXT,
-            font=("Segoe UI", 28, "bold")
-        ).pack(pady=(48, 6))
-
-        tk.Label(
-            card, text="Secure real-time TCP chat", bg=SIDEBAR_BG, fg=MUTED,
-            font=("Segoe UI", 11)
-        ).pack(pady=(0, 34))
-
-        form = tk.Frame(card, bg=SIDEBAR_BG)
-        form.pack(fill="x", padx=46)
-
-        self.username_entry = self.field(form, "Username", "e.g. raj")
-        self.host_entry = self.field(form, "Server IP", self.host)
-        self.port_entry = self.field(form, "Port", str(self.port))
-
-        self.connect_btn = tk.Button(
-            card, text="Connect", command=self.connect,
-            bg=ACCENT, fg="#04110D", activebackground="#06CF9C",
-            activeforeground="#04110D", relief="flat", bd=0,
-            font=("Segoe UI", 11, "bold"), cursor="hand2"
+        outer = tk.Frame(
+            self.root,
+            bg=APP_BG
         )
-        self.connect_btn.pack(fill="x", padx=46, pady=(28, 10), ipady=11)
+        outer.pack(
+            fill="both",
+            expand=True
+        )
+
+        card = tk.Frame(
+            outer,
+            bg=SIDEBAR_BG
+        )
+
+        card.place(
+            relx=0.5,
+            rely=0.5,
+            anchor="center",
+            width=440,
+            height=520
+        )
+
+        tk.Label(
+            card,
+            text="TCP-Nexus",
+            bg=SIDEBAR_BG,
+            fg=TEXT,
+            font=("Segoe UI", 29, "bold")
+        ).pack(
+            pady=(48, 7)
+        )
+
+        tk.Label(
+            card,
+            text="Real-time TCP messaging",
+            bg=SIDEBAR_BG,
+            fg=MUTED,
+            font=("Segoe UI", 10)
+        ).pack(
+            pady=(0, 30)
+        )
+
+        form = tk.Frame(
+            card,
+            bg=SIDEBAR_BG
+        )
+
+        form.pack(
+            fill="x",
+            padx=48
+        )
+
+        self.username_entry = self.make_entry(
+            form,
+            "Username",
+            ""
+        )
+
+        self.host_entry = self.make_entry(
+            form,
+            "Server IP",
+            self.host
+        )
+
+        self.port_entry = self.make_entry(
+            form,
+            "Port",
+            str(self.port)
+        )
+
+        tk.Button(
+            card,
+            text="CONNECT",
+            command=self.connect,
+            bg=ACCENT,
+            fg="#04110D",
+            activebackground="#05C99A",
+            relief="flat",
+            font=("Segoe UI", 10, "bold"),
+            cursor="hand2"
+        ).pack(
+            fill="x",
+            padx=48,
+            pady=(30, 12),
+            ipady=11
+        )
 
         self.login_status = tk.Label(
-            card, text="Server must be running first.",
-            bg=SIDEBAR_BG, fg=MUTED, font=("Segoe UI", 9)
+            card,
+            text="Start server.py before connecting.",
+            bg=SIDEBAR_BG,
+            fg=MUTED,
+            font=("Segoe UI", 9)
         )
-        self.login_status.pack(pady=(8, 0))
+
+        self.login_status.pack()
 
         self.username_entry.focus_set()
-        self.root.bind("<Return>", lambda _e: self.connect())
 
-    def field(self, parent, label, default=""):
-        tk.Label(
-            parent, text=label, bg=SIDEBAR_BG, fg=MUTED,
-            anchor="w", font=("Segoe UI", 9, "bold")
-        ).pack(fill="x", pady=(8, 5))
-        entry = tk.Entry(
-            parent, bg=INPUT_BG, fg=TEXT, insertbackground=TEXT,
-            relief="flat", bd=0, font=("Segoe UI", 11)
+        self.root.bind(
+            "<Return>",
+            lambda _event: self.connect()
         )
-        entry.pack(fill="x", ipady=9)
-        if default:
-            entry.insert(0, default)
+
+    def make_entry(
+        self,
+        parent,
+        label,
+        initial
+    ):
+        tk.Label(
+            parent,
+            text=label,
+            bg=SIDEBAR_BG,
+            fg=MUTED,
+            anchor="w",
+            font=("Segoe UI", 9, "bold")
+        ).pack(
+            fill="x",
+            pady=(9, 5)
+        )
+
+        entry = tk.Entry(
+            parent,
+            bg=INPUT_BG,
+            fg=TEXT,
+            insertbackground=TEXT,
+            relief="flat",
+            font=("Segoe UI", 11)
+        )
+
+        entry.pack(
+            fill="x",
+            ipady=9
+        )
+
+        if initial:
+            entry.insert(
+                0,
+                initial
+            )
+
         return entry
 
-    def build_main_ui(self):
+    # ============================================================
+    # Main UI
+    # ============================================================
+
+    def build_main(self):
         self.root.unbind("<Return>")
         self.clear_root()
 
-        # Top bar
-        top = tk.Frame(self.root, bg=PANEL_BG, height=58)
+        # ---------------- Top bar ----------------
+
+        top = tk.Frame(
+            self.root,
+            bg=HEADER_BG,
+            height=58
+        )
+
         top.pack(fill="x")
         top.pack_propagate(False)
 
         tk.Label(
-            top, text="TCP-Nexus", bg=PANEL_BG, fg=TEXT,
+            top,
+            text="TCP-Nexus",
+            bg=HEADER_BG,
+            fg=TEXT,
             font=("Segoe UI", 16, "bold")
-        ).pack(side="left", padx=18)
+        ).pack(
+            side="left",
+            padx=18
+        )
 
         self.connection_label = tk.Label(
-            top, text="● Connected", bg=PANEL_BG, fg=ACCENT,
+            top,
+            text="● Connected",
+            bg=HEADER_BG,
+            fg=ACCENT,
             font=("Segoe UI", 10, "bold")
         )
-        self.connection_label.pack(side="right", padx=18)
+
+        self.connection_label.pack(
+            side="right",
+            padx=18
+        )
 
         tk.Label(
-            top, text=f"@{self.username}", bg=PANEL_BG, fg=MUTED,
+            top,
+            text=f"@{self.username}",
+            bg=HEADER_BG,
+            fg=MUTED,
             font=("Segoe UI", 10)
-        ).pack(side="right")
+        ).pack(
+            side="right"
+        )
 
-        body = tk.Frame(self.root, bg=APP_BG)
-        body.pack(fill="both", expand=True)
+        # ---------------- Main body ----------------
 
-        # Left navigation
-        left = tk.Frame(body, bg=SIDEBAR_BG, width=300)
-        left.pack(side="left", fill="y")
+        body = tk.Frame(
+            self.root,
+            bg=APP_BG
+        )
+
+        body.pack(
+            fill="both",
+            expand=True
+        )
+
+        self.build_sidebar(body)
+        self.build_chat_panel(body)
+
+        # IMPORTANT:
+        # Refresh once immediately
+        self.refresh_server_data()
+
+        # IMPORTANT:
+        # Refresh again after GUI is fully built.
+        # This prevents login-event timing race.
+        self.root.after(
+            200,
+            self.refresh_server_data
+        )
+
+    # ============================================================
+    # Sidebar
+    # ============================================================
+
+    def build_sidebar(self, parent):
+        left = tk.Frame(
+            parent,
+            bg=SIDEBAR_BG,
+            width=310
+        )
+
+        left.pack(
+            side="left",
+            fill="y"
+        )
+
         left.pack_propagate(False)
 
-        search_wrap = tk.Frame(left, bg=SIDEBAR_BG)
-        search_wrap.pack(fill="x", padx=14, pady=(14, 8))
-        self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", lambda *_: self.refresh_sidebars())
-        search = tk.Entry(
-            search_wrap, textvariable=self.search_var,
-            bg=INPUT_BG, fg=TEXT, insertbackground=TEXT,
-            relief="flat", font=("Segoe UI", 10)
+        # Search
+        search_frame = tk.Frame(
+            left,
+            bg=SIDEBAR_BG
         )
-        search.pack(fill="x", ipady=8)
-        search.insert(0, "")
 
-        tabs = tk.Frame(left, bg=SIDEBAR_BG)
-        tabs.pack(fill="x", padx=14, pady=(0, 8))
+        search_frame.pack(
+            fill="x",
+            padx=14,
+            pady=(14, 10)
+        )
+
+        self.search_var = tk.StringVar()
+
+        self.search_var.trace_add(
+            "write",
+            lambda *_: self.refresh_lists()
+        )
+
+        tk.Entry(
+            search_frame,
+            textvariable=self.search_var,
+            bg=INPUT_BG,
+            fg=TEXT,
+            insertbackground=TEXT,
+            relief="flat",
+            font=("Segoe UI", 10)
+        ).pack(
+            fill="x",
+            ipady=8
+        )
+
+        # Rooms header
+        room_header = tk.Frame(
+            left,
+            bg=SIDEBAR_BG
+        )
+
+        room_header.pack(
+            fill="x",
+            padx=14,
+            pady=(2, 6)
+        )
 
         tk.Label(
-            tabs, text="ROOMS", bg=SIDEBAR_BG, fg=MUTED,
+            room_header,
+            text="ROOMS",
+            bg=SIDEBAR_BG,
+            fg=MUTED,
             font=("Segoe UI", 9, "bold")
-        ).pack(side="left")
+        ).pack(
+            side="left"
+        )
 
         tk.Button(
-            tabs, text="+ Create", command=self.create_room_dialog,
-            bg=SIDEBAR_BG, fg=ACCENT, activebackground=SIDEBAR_BG,
-            activeforeground=ACCENT, relief="flat", cursor="hand2"
-        ).pack(side="right")
-
-        self.rooms_list = tk.Listbox(
-            left, bg=SIDEBAR_BG, fg=TEXT, selectbackground=PANEL_BG,
-            selectforeground=TEXT, activestyle="none", relief="flat",
-            borderwidth=0, highlightthickness=0, font=("Segoe UI", 11)
+            room_header,
+            text="+ Create",
+            command=self.create_room,
+            bg=SIDEBAR_BG,
+            fg=ACCENT,
+            activebackground=SIDEBAR_BG,
+            activeforeground=ACCENT,
+            relief="flat",
+            cursor="hand2"
+        ).pack(
+            side="right"
         )
-        self.rooms_list.pack(fill="x", padx=8, pady=(0, 12), ipady=4)
-        self.rooms_list.bind("<Double-Button-1>", lambda _e: self.join_selected_room())
-        self.rooms_list.bind("<<ListboxSelect>>", self.on_room_select)
 
-        room_actions = tk.Frame(left, bg=SIDEBAR_BG)
-        room_actions.pack(fill="x", padx=14, pady=(0, 14))
-        self.small_button(room_actions, "Join", self.join_selected_room).pack(side="left", fill="x", expand=True, padx=(0, 4))
-        self.small_button(room_actions, "Leave", self.leave_room).pack(side="left", fill="x", expand=True, padx=(4, 0))
+        # Room list
+        self.rooms_list = tk.Listbox(
+            left,
+            bg=SIDEBAR_BG,
+            fg=TEXT,
+            selectbackground=HEADER_BG,
+            selectforeground=TEXT,
+            relief="flat",
+            highlightthickness=0,
+            activestyle="none",
+            font=("Segoe UI", 10)
+        )
 
-        tk.Frame(left, bg=PANEL_BG, height=1).pack(fill="x", padx=14, pady=(0, 10))
+        self.rooms_list.pack(
+            fill="x",
+            padx=8,
+            pady=(0, 8)
+        )
 
+        self.rooms_list.bind(
+            "<Double-Button-1>",
+            lambda _event: self.join_selected_room()
+        )
+
+        room_buttons = tk.Frame(
+            left,
+            bg=SIDEBAR_BG
+        )
+
+        room_buttons.pack(
+            fill="x",
+            padx=14,
+            pady=(0, 12)
+        )
+
+        self.side_button(
+            room_buttons,
+            "Join",
+            self.join_selected_room
+        ).pack(
+            side="left",
+            fill="x",
+            expand=True,
+            padx=(0, 4)
+        )
+
+        self.side_button(
+            room_buttons,
+            "Leave",
+            self.leave_room
+        ).pack(
+            side="left",
+            fill="x",
+            expand=True,
+            padx=(4, 0)
+        )
+
+        tk.Frame(
+            left,
+            height=1,
+            bg=HEADER_BG
+        ).pack(
+            fill="x",
+            padx=14,
+            pady=(0, 10)
+        )
+
+        # Online users
         tk.Label(
-            left, text="ONLINE USERS", bg=SIDEBAR_BG, fg=MUTED,
-            anchor="w", font=("Segoe UI", 9, "bold")
-        ).pack(fill="x", padx=14, pady=(0, 6))
+            left,
+            text="ONLINE USERS",
+            bg=SIDEBAR_BG,
+            fg=MUTED,
+            anchor="w",
+            font=("Segoe UI", 9, "bold")
+        ).pack(
+            fill="x",
+            padx=14,
+            pady=(0, 6)
+        )
 
         self.users_list = tk.Listbox(
-            left, bg=SIDEBAR_BG, fg=TEXT, selectbackground=PANEL_BG,
-            selectforeground=TEXT, activestyle="none", relief="flat",
-            borderwidth=0, highlightthickness=0, font=("Segoe UI", 11)
+            left,
+            bg=SIDEBAR_BG,
+            fg=TEXT,
+            selectbackground=HEADER_BG,
+            selectforeground=TEXT,
+            relief="flat",
+            highlightthickness=0,
+            activestyle="none",
+            font=("Segoe UI", 10)
         )
-        self.users_list.pack(fill="both", expand=True, padx=8)
-        self.users_list.bind("<Double-Button-1>", lambda _e: self.open_private_chat())
 
-        pm_btn = tk.Button(
-            left, text="Private Message", command=self.open_private_chat,
-            bg=PANEL_BG, fg=TEXT, activebackground=INPUT_BG,
-            activeforeground=TEXT, relief="flat", cursor="hand2",
-            font=("Segoe UI", 10, "bold")
+        self.users_list.pack(
+            fill="both",
+            expand=True,
+            padx=8
         )
-        pm_btn.pack(fill="x", padx=14, pady=14, ipady=8)
 
-        # Main chat
-        main = tk.Frame(body, bg=APP_BG)
-        main.pack(side="left", fill="both", expand=True)
-
-        header = tk.Frame(main, bg=PANEL_BG, height=70)
-        header.pack(fill="x")
-        header.pack_propagate(False)
-
-        avatar = tk.Label(
-            header, text="#", bg=ACCENT, fg="#07251D",
-            width=3, height=1, font=("Segoe UI", 13, "bold")
+        self.users_list.bind(
+            "<Double-Button-1>",
+            lambda _event: self.open_private_chat()
         )
-        avatar.pack(side="left", padx=(18, 12), pady=13)
-
-        title_wrap = tk.Frame(header, bg=PANEL_BG)
-        title_wrap.pack(side="left", fill="y", pady=12)
-        self.chat_title = tk.Label(
-            title_wrap, text="Lobby", bg=PANEL_BG, fg=TEXT,
-            anchor="w", font=("Segoe UI", 13, "bold")
-        )
-        self.chat_title.pack(anchor="w")
-        self.chat_subtitle = tk.Label(
-            title_wrap, text="Group chat", bg=PANEL_BG, fg=MUTED,
-            anchor="w", font=("Segoe UI", 9)
-        )
-        self.chat_subtitle.pack(anchor="w")
 
         tk.Button(
-            header, text="Refresh", command=self.refresh_server_data,
-            bg=PANEL_BG, fg=MUTED, activebackground=INPUT_BG,
-            activeforeground=TEXT, relief="flat", cursor="hand2"
-        ).pack(side="right", padx=16)
-
-        # Chat canvas with scroll
-        chat_container = tk.Frame(main, bg=APP_BG)
-        chat_container.pack(fill="both", expand=True)
-
-        self.chat_canvas = tk.Canvas(chat_container, bg=APP_BG, highlightthickness=0)
-        scrollbar = tk.Scrollbar(chat_container, command=self.chat_canvas.yview)
-        self.chat_canvas.configure(yscrollcommand=scrollbar.set)
-
-        scrollbar.pack(side="right", fill="y")
-        self.chat_canvas.pack(side="left", fill="both", expand=True)
-
-        self.messages_frame = tk.Frame(self.chat_canvas, bg=APP_BG)
-        self.messages_window = self.chat_canvas.create_window(
-            (0, 0), window=self.messages_frame, anchor="nw"
+            left,
+            text="Private Chat",
+            command=self.open_private_chat,
+            bg=HEADER_BG,
+            fg=TEXT,
+            activebackground=INPUT_BG,
+            activeforeground=TEXT,
+            relief="flat",
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2"
+        ).pack(
+            fill="x",
+            padx=14,
+            pady=14,
+            ipady=8
         )
-        self.messages_frame.bind("<Configure>", self._update_scrollregion)
-        self.chat_canvas.bind("<Configure>", self._resize_message_window)
+
+    def side_button(
+        self,
+        parent,
+        text,
+        command
+    ):
+        return tk.Button(
+            parent,
+            text=text,
+            command=command,
+            bg=HEADER_BG,
+            fg=TEXT,
+            activebackground=INPUT_BG,
+            activeforeground=TEXT,
+            relief="flat",
+            cursor="hand2",
+            font=("Segoe UI", 9, "bold")
+        )
+
+    # ============================================================
+    # Chat panel
+    # ============================================================
+
+    def build_chat_panel(self, parent):
+        main = tk.Frame(
+            parent,
+            bg=APP_BG
+        )
+
+        main.pack(
+            side="left",
+            fill="both",
+            expand=True
+        )
+
+        # Chat header
+        chat_header = tk.Frame(
+            main,
+            bg=HEADER_BG,
+            height=70
+        )
+
+        chat_header.pack(
+            fill="x"
+        )
+
+        chat_header.pack_propagate(False)
+
+        self.avatar_label = tk.Label(
+            chat_header,
+            text="#",
+            bg=ACCENT,
+            fg="#04271F",
+            font=("Segoe UI", 13, "bold"),
+            width=3
+        )
+
+        self.avatar_label.pack(
+            side="left",
+            padx=(18, 12),
+            pady=14
+        )
+
+        header_text = tk.Frame(
+            chat_header,
+            bg=HEADER_BG
+        )
+
+        header_text.pack(
+            side="left",
+            pady=12
+        )
+
+        self.chat_title = tk.Label(
+            header_text,
+            text="# lobby",
+            bg=HEADER_BG,
+            fg=TEXT,
+            font=("Segoe UI", 13, "bold"),
+            anchor="w"
+        )
+
+        self.chat_title.pack(
+            anchor="w"
+        )
+
+        self.chat_subtitle = tk.Label(
+            header_text,
+            text="Group chat",
+            bg=HEADER_BG,
+            fg=MUTED,
+            font=("Segoe UI", 9),
+            anchor="w"
+        )
+
+        self.chat_subtitle.pack(
+            anchor="w"
+        )
+
+        tk.Button(
+            chat_header,
+            text="Refresh",
+            command=self.refresh_server_data,
+            bg=HEADER_BG,
+            fg=MUTED,
+            activebackground=INPUT_BG,
+            activeforeground=TEXT,
+            relief="flat",
+            cursor="hand2"
+        ).pack(
+            side="right",
+            padx=16
+        )
+
+        # Chat canvas
+        chat_container = tk.Frame(
+            main,
+            bg=APP_BG
+        )
+
+        chat_container.pack(
+            fill="both",
+            expand=True
+        )
+
+        self.chat_canvas = tk.Canvas(
+            chat_container,
+            bg=APP_BG,
+            highlightthickness=0
+        )
+
+        scrollbar = tk.Scrollbar(
+            chat_container,
+            orient="vertical",
+            command=self.chat_canvas.yview
+        )
+
+        self.chat_canvas.configure(
+            yscrollcommand=scrollbar.set
+        )
+
+        scrollbar.pack(
+            side="right",
+            fill="y"
+        )
+
+        self.chat_canvas.pack(
+            side="left",
+            fill="both",
+            expand=True
+        )
+
+        self.messages_frame = tk.Frame(
+            self.chat_canvas,
+            bg=APP_BG
+        )
+
+        self.messages_window = self.chat_canvas.create_window(
+            (0, 0),
+            window=self.messages_frame,
+            anchor="nw"
+        )
+
+        self.messages_frame.bind(
+            "<Configure>",
+            self.update_scrollregion
+        )
+
+        self.chat_canvas.bind(
+            "<Configure>",
+            self.resize_messages_frame
+        )
 
         # Composer
-        composer = tk.Frame(main, bg=PANEL_BG, height=72)
-        composer.pack(fill="x")
+        composer = tk.Frame(
+            main,
+            bg=HEADER_BG,
+            height=74
+        )
+
+        composer.pack(
+            fill="x"
+        )
+
         composer.pack_propagate(False)
 
         self.message_var = tk.StringVar()
+
         self.message_entry = tk.Entry(
-            composer, textvariable=self.message_var,
-            bg=INPUT_BG, fg=TEXT, insertbackground=TEXT,
-            relief="flat", font=("Segoe UI", 11)
-        )
-        self.message_entry.pack(side="left", fill="both", expand=True, padx=(16, 10), pady=14, ipady=9)
-        self.message_entry.bind("<Return>", lambda _e: self.send_message())
-
-        send = tk.Button(
-            composer, text="Send", command=self.send_message,
-            bg=ACCENT, fg="#04110D", activebackground="#06CF9C",
-            activeforeground="#04110D", relief="flat", bd=0,
-            font=("Segoe UI", 10, "bold"), cursor="hand2"
-        )
-        send.pack(side="right", padx=(0, 16), pady=14, ipadx=17, ipady=8)
-
-        self.refresh_server_data()
-        self.add_system_message("Welcome to TCP-Nexus. Select a room or user to start chatting.")
-        self.message_entry.focus_set()
-
-    def small_button(self, parent, text, command):
-        return tk.Button(
-            parent, text=text, command=command,
-            bg=PANEL_BG, fg=TEXT, activebackground=INPUT_BG,
-            activeforeground=TEXT, relief="flat", cursor="hand2",
-            font=("Segoe UI", 9, "bold")
+            composer,
+            textvariable=self.message_var,
+            bg=INPUT_BG,
+            fg=TEXT,
+            insertbackground=TEXT,
+            relief="flat",
+            font=("Segoe UI", 11)
         )
 
-    # ---------------- networking ----------------
+        self.message_entry.pack(
+            side="left",
+            fill="both",
+            expand=True,
+            padx=(16, 10),
+            pady=14,
+            ipady=9
+        )
+
+        self.message_entry.bind(
+            "<Return>",
+            lambda _event: self.send_message()
+        )
+
+        tk.Button(
+            composer,
+            text="Send",
+            command=self.send_message,
+            bg=ACCENT,
+            fg="#04110D",
+            activebackground="#05C99A",
+            relief="flat",
+            font=("Segoe UI", 10, "bold"),
+            cursor="hand2"
+        ).pack(
+            side="right",
+            padx=(0, 16),
+            pady=14,
+            ipadx=18,
+            ipady=8
+        )
+
+    # ============================================================
+    # Networking
+    # ============================================================
+
     def connect(self):
         username = self.username_entry.get().strip()
         host = self.host_entry.get().strip() or "127.0.0.1"
 
         try:
-            port = int(self.port_entry.get().strip())
+            port = int(
+                self.port_entry.get().strip()
+            )
+
         except ValueError:
-            messagebox.showerror("Invalid port", "Port must be a number.")
+            messagebox.showerror(
+                "Invalid Port",
+                "Port must be a number."
+            )
             return
 
         if not username:
-            messagebox.showwarning("Username required", "Please enter a username.")
+            messagebox.showwarning(
+                "Username",
+                "Enter a username."
+            )
             return
 
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock = socket.socket(
+                socket.AF_INET,
+                socket.SOCK_STREAM
+            )
+
             sock.settimeout(5)
             sock.connect((host, port))
             sock.settimeout(None)
+
         except OSError as exc:
-            messagebox.showerror("Connection failed", f"Could not connect to server.\n\n{exc}")
+            messagebox.showerror(
+                "Connection Failed",
+                f"Could not connect to {host}:{port}\n\n{exc}"
+            )
             return
 
         self.sock = sock
+        self.username = username
         self.host = host
         self.port = port
-        self.username = username
         self.running.set()
 
-        self.recv_thread = threading.Thread(target=self.receive_loop, daemon=True)
-        self.recv_thread.start()
-        self.send_json({"type": "login", "username": username})
-        self.login_status.configure(text="Logging in...", fg=ACCENT)
+        threading.Thread(
+            target=self.receive_loop,
+            daemon=True,
+            name="TCP-Nexus-Receiver"
+        ).start()
+
+        self.send_json({
+            "type": "login",
+            "username": username
+        })
+
+        self.login_status.configure(
+            text="Connecting...",
+            fg=ACCENT
+        )
 
     def receive_loop(self):
         buffer = ""
+
         try:
             while self.running.is_set():
                 data = self.sock.recv(4096)
+
                 if not data:
                     break
+
                 buffer += data.decode("utf-8")
+
                 while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
+                    line, buffer = buffer.split(
+                        "\n",
+                        1
+                    )
+
                     line = line.strip()
+
                     if not line:
                         continue
+
                     try:
                         payload = json.loads(line)
+
                     except json.JSONDecodeError:
                         continue
+
                     self.incoming.put(payload)
-        except OSError:
+
+        except (
+            OSError,
+            ConnectionResetError,
+            BrokenPipeError
+        ):
             pass
+
         finally:
             if self.running.is_set():
-                self.incoming.put({"type": "_disconnect"})
+                self.incoming.put({
+                    "type": "_disconnect"
+                })
 
-    def send_json(self, payload):
+    def send_json(self, payload) -> bool:
         if not self.sock:
             return False
+
         try:
-            data = json.dumps(payload, ensure_ascii=False) + "\n"
-            self.sock.sendall(data.encode("utf-8"))
+            raw = (
+                json.dumps(
+                    payload,
+                    ensure_ascii=False
+                )
+                + "\n"
+            )
+
+            self.sock.sendall(
+                raw.encode("utf-8")
+            )
+
             return True
+
         except OSError:
-            self.incoming.put({"type": "_disconnect"})
+            self.incoming.put({
+                "type": "_disconnect"
+            })
+
             return False
 
     def process_incoming(self):
@@ -372,250 +887,1062 @@ class TCPNexusClient:
             while True:
                 payload = self.incoming.get_nowait()
                 self.handle_payload(payload)
+
         except queue.Empty:
             pass
-        self.root.after(80, self.process_incoming)
+
+        self.root.after(
+            70,
+            self.process_incoming
+        )
+
+    # ============================================================
+    # Server Events
+    # ============================================================
 
     def handle_payload(self, p):
-        t = p.get("type")
+        msg_type = p.get("type")
 
-        if t == "login_ok":
-            self.build_main_ui()
+        if msg_type == "login_ok":
+            self.build_main()
 
-        elif t == "login_error":
-            self.login_status.configure(text=p.get("message", "Login failed"), fg=DANGER)
+            # Extra refresh after build
+            self.root.after(
+                200,
+                self.refresh_server_data
+            )
+
+        elif msg_type == "login_error":
+            self.login_status.configure(
+                text=p.get(
+                    "message",
+                    "Login failed"
+                ),
+                fg=DANGER
+            )
+
             self.disconnect()
 
-        elif t == "joined":
+        elif msg_type == "joined":
             self.current_room = p.get("room")
             self.chat_mode = "room"
-            self.active_private_user = None
-            self.chat_title.configure(text=f"# {self.current_room}")
-            self.chat_subtitle.configure(text="Group chat • TCP room")
-            self.clear_messages()
-            self.add_system_message(p.get("message", f"Joined {self.current_room}"))
+            self.private_user = None
+
+            self.chat_title.configure(
+                text=f"# {self.current_room}"
+            )
+
+            self.chat_subtitle.configure(
+                text="Group chat • TCP room"
+            )
+
+            self.avatar_label.configure(
+                text="#"
+            )
+
+            self.redraw_current_chat()
+
+            self.add_system_message(
+                p.get(
+                    "message",
+                    "Joined room"
+                )
+            )
+
             self.refresh_server_data()
 
-        elif t == "left":
+        elif msg_type == "left":
             self.current_room = None
-            self.add_system_message(p.get("message", "Left room"))
+
+            self.add_system_message(
+                p.get(
+                    "message",
+                    "Left room"
+                )
+            )
+
             self.refresh_server_data()
 
-        elif t == "message":
-            if self.chat_mode == "room" and p.get("room") == self.current_room:
-                self.add_bubble(
-                    p.get("from", "?"),
-                    p.get("message", ""),
-                    own=(p.get("from") == self.username),
-                    timestamp=p.get("timestamp")
+        elif msg_type == "rooms":
+            self.rooms = {
+                item["name"]: item.get(
+                    "users",
+                    0
+                )
+                for item in p.get(
+                    "rooms",
+                    []
+                )
+            }
+
+            self.refresh_lists()
+
+        elif msg_type == "users":
+            self.users = p.get(
+                "users",
+                []
+            )
+
+            self.refresh_lists()
+
+        elif msg_type == "message":
+            self.store_room_message(p)
+
+            if (
+                self.chat_mode == "room"
+                and p.get("room") == self.current_room
+            ):
+                self.render_message_event(p)
+
+        elif msg_type == "private":
+            self.store_private_message(p)
+
+            if p.get("from") == self.username:
+                other = p.get("to")
+            else:
+                other = p.get("from")
+
+            if (
+                self.chat_mode == "private"
+                and self.private_user == other
+            ):
+                self.render_message_event(p)
+
+            elif p.get("from") != self.username:
+                self.add_system_message(
+                    f"New private message from {p.get('from')}"
                 )
 
-        elif t == "private":
-            sender = p.get("from", "?")
-            if self.chat_mode == "private" and self.active_private_user == sender:
-                self.add_bubble(sender, p.get("message", ""), own=False, timestamp=p.get("timestamp"))
-            else:
-                self.add_system_message(f"Private message from {sender}: {p.get('message', '')}")
+        elif msg_type == "message_edited":
+            self.apply_edit_event(p)
 
-        elif t == "private_sent":
-            if self.chat_mode == "private" and self.active_private_user == p.get("to"):
-                self.add_bubble(self.username, p.get("message", ""), own=True, timestamp=p.get("timestamp"))
+        elif msg_type == "message_deleted":
+            self.apply_delete_event(p)
 
-        elif t == "rooms":
-            self.rooms = {r["name"]: r.get("users", 0) for r in p.get("rooms", [])}
-            self.refresh_sidebars()
+        elif msg_type == "system":
+            self.add_system_message(
+                p.get(
+                    "message",
+                    ""
+                )
+            )
 
-        elif t == "users":
-            self.users = p.get("users", [])
-            self.refresh_sidebars()
+        elif msg_type == "error":
+            self.add_system_message(
+                "Error: "
+                + p.get(
+                    "message",
+                    ""
+                )
+            )
 
-        elif t == "system":
-            self.add_system_message(p.get("message", ""))
-
-        elif t == "error":
-            self.add_system_message("Error: " + p.get("message", ""))
-
-        elif t == "_disconnect":
-            self.connection_label.configure(text="● Disconnected", fg=DANGER) if hasattr(self, "connection_label") else None
+        elif msg_type == "_disconnect":
             self.running.clear()
-            messagebox.showwarning("Disconnected", "Connection to the server was lost.")
 
-    # ---------------- room/user actions ----------------
+            if hasattr(
+                self,
+                "connection_label"
+            ):
+                self.connection_label.configure(
+                    text="● Disconnected",
+                    fg=DANGER
+                )
+
+            messagebox.showwarning(
+                "Disconnected",
+                "Connection to the server was lost."
+            )
+
+    # ============================================================
+    # Online Users + Rooms
+    # ============================================================
+
     def refresh_server_data(self):
-        self.send_json({"type": "rooms"})
-        self.send_json({"type": "users"})
-
-    def refresh_sidebars(self):
-        if not hasattr(self, "rooms_list"):
+        if not self.sock:
             return
+
+        self.send_json({
+            "type": "rooms"
+        })
+
+        self.send_json({
+            "type": "users"
+        })
+
+    def refresh_lists(self):
+        if not hasattr(
+            self,
+            "rooms_list"
+        ):
+            return
+
         query = self.search_var.get().strip().lower()
 
-        self.rooms_list.delete(0, tk.END)
-        for name, count in sorted(self.rooms.items()):
-            label = f"# {name}   ({count})"
-            if not query or query in name.lower():
-                self.rooms_list.insert(tk.END, label)
+        # ---------------- Rooms ----------------
 
-        self.users_list.delete(0, tk.END)
-        for user in sorted(self.users):
-            if user == self.username:
+        self.rooms_list.delete(
+            0,
+            tk.END
+        )
+
+        for room, count in sorted(
+            self.rooms.items()
+        ):
+            if (
+                query
+                and query not in room.lower()
+            ):
                 continue
-            if not query or query in user.lower():
-                self.users_list.insert(tk.END, f"● {user}")
 
-    def on_room_select(self, _event=None):
-        # Selection only; joining is explicit by button/double-click.
-        pass
+            self.rooms_list.insert(
+                tk.END,
+                f"# {room}   ({count})"
+            )
 
-    def selected_room_name(self):
-        selection = self.rooms_list.curselection()
-        if not selection:
+        # ---------------- Users ----------------
+
+        self.users_list.delete(
+            0,
+            tk.END
+        )
+
+        for user in sorted(self.users):
+            if (
+                query
+                and query not in user.lower()
+            ):
+                continue
+
+            # FIX:
+            # Show own username instead of hiding it.
+            if user == self.username:
+                label = f"● {user} (You)"
+            else:
+                label = f"● {user}"
+
+            self.users_list.insert(
+                tk.END,
+                label
+            )
+
+    # ============================================================
+    # Room Actions
+    # ============================================================
+
+    def selected_room(self):
+        selected = self.rooms_list.curselection()
+
+        if not selected:
             return None
-        text = self.rooms_list.get(selection[0])
-        # "# room   (2)" -> room
-        return text[2:].split("   (", 1)[0].strip()
+
+        raw = self.rooms_list.get(
+            selected[0]
+        )
+
+        return (
+            raw[2:]
+            .split(
+                "   (",
+                1
+            )[0]
+            .strip()
+        )
 
     def join_selected_room(self):
-        room = self.selected_room_name()
-        if not room:
-            messagebox.showinfo("Select room", "Select a room first.")
-            return
-        self.send_json({"type": "join", "room": room})
+        room = self.selected_room()
 
-    def create_room_dialog(self):
-        room = simpledialog.askstring("Create Room", "Room name:", parent=self.root)
+        if not room:
+            messagebox.showinfo(
+                "Join Room",
+                "Select a room first."
+            )
+            return
+
+        self.send_json({
+            "type": "join",
+            "room": room
+        })
+
+    def create_room(self):
+        room = simpledialog.askstring(
+            "Create Room",
+            "Enter room name:",
+            parent=self.root
+        )
+
         if room:
             room = room.strip()
+
             if room:
-                self.send_json({"type": "create", "room": room})
-                self.root.after(250, self.refresh_server_data)
+                self.send_json({
+                    "type": "create",
+                    "room": room
+                })
+
+                self.root.after(
+                    250,
+                    self.refresh_server_data
+                )
 
     def leave_room(self):
-        self.send_json({"type": "leave"})
+        self.send_json({
+            "type": "leave"
+        })
+
+    # ============================================================
+    # Private Chat
+    # ============================================================
+
+    def selected_online_user(self):
+        selected = self.users_list.curselection()
+
+        if not selected:
+            return None
+
+        raw = self.users_list.get(
+            selected[0]
+        )
+
+        user = (
+            raw
+            .replace(
+                "●",
+                "",
+                1
+            )
+            .strip()
+        )
+
+        # Remove "(You)"
+        if user.endswith("(You)"):
+            user = (
+                user[:-5]
+                .strip()
+            )
+
+        return user
 
     def open_private_chat(self):
-        selection = self.users_list.curselection()
-        if not selection:
-            messagebox.showinfo("Select user", "Select an online user first.")
+        user = self.selected_online_user()
+
+        if not user:
+            messagebox.showinfo(
+                "Private Chat",
+                "Select an online user first."
+            )
             return
-        user = self.users_list.get(selection[0]).replace("●", "", 1).strip()
+
+        # Prevent private-chatting yourself
+        if user == self.username:
+            messagebox.showinfo(
+                "Private Chat",
+                "This is your own account."
+            )
+            return
+
         self.chat_mode = "private"
-        self.active_private_user = user
-        self.chat_title.configure(text=user)
-        self.chat_subtitle.configure(text="● Online • Private chat")
-        self.clear_messages()
-        self.add_system_message(f"Private conversation with {user}")
+        self.private_user = user
 
-    # ---------------- messages ----------------
-    def send_message(self):
-        text = self.message_var.get().strip()
-        if not text:
+        self.chat_title.configure(
+            text=user
+        )
+
+        self.chat_subtitle.configure(
+            text="● Online • Private chat"
+        )
+
+        self.avatar_label.configure(
+            text=(
+                user[:1].upper()
+                if user
+                else "U"
+            )
+        )
+
+        self.redraw_current_chat()
+        self.message_entry.focus_set()
+
+    # ============================================================
+    # Message storage
+    # ============================================================
+
+    def store_room_message(self, p):
+        room = p.get("room")
+
+        if not room:
             return
 
-        if self.chat_mode == "private":
-            if not self.active_private_user:
-                messagebox.showinfo("Private chat", "Select an online user first.")
-                return
-            self.send_json({
-                "type": "pm",
-                "to": self.active_private_user,
-                "message": text
-            })
+        messages = self.room_messages.setdefault(
+            room,
+            []
+        )
+
+        if any(
+            item.get("id") == p.get("id")
+            for item in messages
+        ):
+            return
+
+        messages.append(
+            dict(p)
+        )
+
+    def private_key(self, user):
+        return user
+
+    def store_private_message(self, p):
+        if p.get("from") == self.username:
+            other = p.get("to")
         else:
-            if not self.current_room:
-                messagebox.showinfo("Join a room", "Please join a room first.")
-                return
-            self.send_json({"type": "msg", "message": text})
+            other = p.get("from")
 
-        self.message_var.set("")
+        if not other:
+            return
 
-    def add_bubble(self, sender, message, own=False, timestamp=None):
-        row = tk.Frame(self.messages_frame, bg=APP_BG)
-        row.pack(fill="x", padx=20, pady=5)
+        key = self.private_key(other)
 
-        bubble = tk.Frame(row, bg=OWN_BUBBLE if own else OTHER_BUBBLE)
-        bubble.pack(side="right" if own else "left", anchor="e" if own else "w")
+        messages = self.private_messages.setdefault(
+            key,
+            []
+        )
+
+        if any(
+            item.get("id") == p.get("id")
+            for item in messages
+        ):
+            return
+
+        messages.append(
+            dict(p)
+        )
+
+    def find_stored_message(
+        self,
+        message_id
+    ):
+        for messages in self.room_messages.values():
+            for item in messages:
+                if item.get("id") == message_id:
+                    return item
+
+        for messages in self.private_messages.values():
+            for item in messages:
+                if item.get("id") == message_id:
+                    return item
+
+        return None
+
+    # ============================================================
+    # Edit/Delete
+    # ============================================================
+
+    def edit_message_dialog(
+        self,
+        message_id
+    ):
+        item = self.find_stored_message(
+            message_id
+        )
+
+        if not item:
+            return
+
+        if item.get("from") != self.username:
+            return
+
+        current = item.get(
+            "message",
+            ""
+        )
+
+        new_text = simpledialog.askstring(
+            "Edit Message",
+            "Edit your message:",
+            initialvalue=current,
+            parent=self.root
+        )
+
+        if new_text is None:
+            return
+
+        new_text = new_text.strip()
+
+        if not new_text:
+            messagebox.showwarning(
+                "Edit Message",
+                "Message cannot be empty."
+            )
+            return
+
+        self.send_json({
+            "type": "edit",
+            "id": message_id,
+            "message": new_text
+        })
+
+    def delete_message_confirm(
+        self,
+        message_id
+    ):
+        item = self.find_stored_message(
+            message_id
+        )
+
+        if (
+            not item
+            or item.get("from") != self.username
+        ):
+            return
+
+        if messagebox.askyesno(
+            "Delete Message",
+            "Delete this message for everyone?"
+        ):
+            self.send_json({
+                "type": "delete",
+                "id": message_id
+            })
+
+    def apply_edit_event(self, p):
+        message_id = p.get("id")
+
+        item = self.find_stored_message(
+            message_id
+        )
+
+        if item:
+            item["message"] = p.get(
+                "message",
+                ""
+            )
+
+            item["edited"] = True
+
+        widget_data = self.message_widgets.get(
+            message_id
+        )
+
+        if widget_data:
+            widget_data[
+                "text_label"
+            ].configure(
+                text=p.get(
+                    "message",
+                    ""
+                )
+            )
+
+            widget_data[
+                "meta_label"
+            ].configure(
+                text=self.meta_text(
+                    widget_data["timestamp"],
+                    widget_data["own"],
+                    edited=True
+                )
+            )
+
+    def apply_delete_event(self, p):
+        message_id = p.get("id")
+
+        item = self.find_stored_message(
+            message_id
+        )
+
+        if item:
+            item["deleted"] = True
+            item["message"] = (
+                "This message was deleted"
+            )
+
+        widget_data = self.message_widgets.get(
+            message_id
+        )
+
+        if widget_data:
+            widget_data[
+                "text_label"
+            ].configure(
+                text="This message was deleted",
+                fg=MUTED,
+                font=(
+                    "Segoe UI",
+                    10,
+                    "italic"
+                )
+            )
+
+            menu_button = widget_data.get(
+                "menu_button"
+            )
+
+            if menu_button:
+                menu_button.destroy()
+
+                widget_data[
+                    "menu_button"
+                ] = None
+
+    # ============================================================
+    # Message rendering
+    # ============================================================
+
+    def meta_text(
+        self,
+        timestamp,
+        own,
+        edited=False
+    ):
+        text = (
+            timestamp
+            or datetime.now().strftime("%H:%M")
+        )
+
+        if edited:
+            text += "  edited"
+
+        if own:
+            text += "  ✓✓"
+
+        return text
+
+    def render_message_event(self, p):
+        message_id = p.get("id")
+
+        if not message_id:
+            return
+
+        if message_id in self.message_widgets:
+            return
+
+        sender = p.get(
+            "from",
+            "?"
+        )
+
+        own = (
+            sender == self.username
+        )
+
+        deleted = p.get(
+            "deleted",
+            False
+        )
+
+        text = (
+            "This message was deleted"
+            if deleted
+            else p.get(
+                "message",
+                ""
+            )
+        )
+
+        timestamp = (
+            p.get("timestamp")
+            or datetime.now().strftime("%H:%M")
+        )
+
+        edited = p.get(
+            "edited",
+            False
+        )
+
+        row = tk.Frame(
+            self.messages_frame,
+            bg=APP_BG
+        )
+
+        row.pack(
+            fill="x",
+            padx=22,
+            pady=5
+        )
+
+        bubble_bg = (
+            OWN_BUBBLE
+            if own
+            else OTHER_BUBBLE
+        )
+
+        bubble = tk.Frame(
+            row,
+            bg=bubble_bg
+        )
+
+        bubble.pack(
+            side=(
+                "right"
+                if own
+                else "left"
+            ),
+            anchor=(
+                "e"
+                if own
+                else "w"
+            )
+        )
+
+        top_line = tk.Frame(
+            bubble,
+            bg=bubble_bg
+        )
+
+        top_line.pack(
+            fill="x",
+            padx=9,
+            pady=(6, 0)
+        )
 
         if not own:
             tk.Label(
-                bubble, text=sender, bg=OTHER_BUBBLE, fg=ACCENT,
-                font=("Segoe UI", 8, "bold"), anchor="w"
-            ).pack(fill="x", padx=10, pady=(7, 0))
+                top_line,
+                text=sender,
+                bg=bubble_bg,
+                fg=ACCENT,
+                font=(
+                    "Segoe UI",
+                    8,
+                    "bold"
+                )
+            ).pack(
+                side="left"
+            )
 
-        tk.Label(
-            bubble, text=message, bg=OWN_BUBBLE if own else OTHER_BUBBLE,
-            fg=TEXT, justify="left", wraplength=520,
-            font=("Segoe UI", 10), anchor="w"
-        ).pack(fill="x", padx=10, pady=(5, 2))
+        menu_button = None
 
-        stamp = timestamp or datetime.now().strftime("%H:%M")
-        tk.Label(
-            bubble, text=stamp + ("  ✓✓" if own else ""),
-            bg=OWN_BUBBLE if own else OTHER_BUBBLE,
-            fg="#9CCFC0" if own else MUTED,
-            font=("Segoe UI", 7), anchor="e"
-        ).pack(fill="x", padx=10, pady=(0, 6))
+        if own and not deleted:
+            menu_button = tk.Button(
+                top_line,
+                text="⋮",
+                bg=bubble_bg,
+                fg=MUTED,
+                activebackground=bubble_bg,
+                activeforeground=TEXT,
+                relief="flat",
+                bd=0,
+                font=(
+                    "Segoe UI",
+                    12,
+                    "bold"
+                ),
+                cursor="hand2",
+                command=lambda mid=message_id:
+                    self.show_message_menu(mid)
+            )
 
-        self.root.after(30, self.scroll_bottom)
+            menu_button.pack(
+                side="right"
+            )
 
-    def add_system_message(self, text):
-        if not hasattr(self, "messages_frame"):
-            return
-        wrap = tk.Frame(self.messages_frame, bg=APP_BG)
-        wrap.pack(fill="x", padx=20, pady=6)
-        tk.Label(
-            wrap, text=text, bg=SYSTEM_BG, fg=MUTED,
-            font=("Segoe UI", 8), padx=10, pady=5
-        ).pack()
-        self.root.after(30, self.scroll_bottom)
+        text_label = tk.Label(
+            bubble,
+            text=text,
+            bg=bubble_bg,
+            fg=(
+                MUTED
+                if deleted
+                else TEXT
+            ),
+            justify="left",
+            wraplength=520,
+            anchor="w",
+            font=(
+                "Segoe UI",
+                10,
+                "italic"
+                if deleted
+                else "normal"
+            )
+        )
+
+        text_label.pack(
+            fill="x",
+            padx=10,
+            pady=(4, 2)
+        )
+
+        meta_label = tk.Label(
+            bubble,
+            text=self.meta_text(
+                timestamp,
+                own,
+                edited
+            ),
+            bg=bubble_bg,
+            fg=(
+                "#9CCFC0"
+                if own
+                else MUTED
+            ),
+            font=(
+                "Segoe UI",
+                7
+            ),
+            anchor="e"
+        )
+
+        meta_label.pack(
+            fill="x",
+            padx=10,
+            pady=(0, 6)
+        )
+
+        self.message_widgets[
+            message_id
+        ] = {
+            "row": row,
+            "bubble": bubble,
+            "text_label": text_label,
+            "meta_label": meta_label,
+            "menu_button": menu_button,
+            "timestamp": timestamp,
+            "own": own
+        }
+
+        self.root.after(
+            20,
+            self.scroll_bottom
+        )
+
+    def show_message_menu(
+        self,
+        message_id
+    ):
+        menu = tk.Menu(
+            self.root,
+            tearoff=0,
+            bg=MENU_BG,
+            fg=TEXT,
+            activebackground=ACCENT,
+            activeforeground="#04110D"
+        )
+
+        menu.add_command(
+            label="Edit message",
+            command=lambda:
+                self.edit_message_dialog(
+                    message_id
+                )
+        )
+
+        menu.add_command(
+            label="Delete for everyone",
+            command=lambda:
+                self.delete_message_confirm(
+                    message_id
+                )
+        )
+
+        try:
+            x = self.root.winfo_pointerx()
+            y = self.root.winfo_pointery()
+
+            menu.tk_popup(
+                x,
+                y
+            )
+
+        finally:
+            menu.grab_release()
+
+    def redraw_current_chat(self):
+        self.clear_messages()
+
+        if self.chat_mode == "room":
+            messages = self.room_messages.get(
+                self.current_room,
+                []
+            )
+
+        else:
+            messages = self.private_messages.get(
+                self.private_key(
+                    self.private_user
+                ),
+                []
+            )
+
+        for item in messages:
+            self.render_message_event(
+                item
+            )
 
     def clear_messages(self):
         for child in self.messages_frame.winfo_children():
             child.destroy()
 
-    def _update_scrollregion(self, _event=None):
-        self.chat_canvas.configure(scrollregion=self.chat_canvas.bbox("all"))
+        self.message_widgets.clear()
 
-    def _resize_message_window(self, event):
-        self.chat_canvas.itemconfigure(self.messages_window, width=event.width)
+    def add_system_message(self, text):
+        if (
+            not hasattr(
+                self,
+                "messages_frame"
+            )
+            or not text
+        ):
+            return
+
+        wrap = tk.Frame(
+            self.messages_frame,
+            bg=APP_BG
+        )
+
+        wrap.pack(
+            fill="x",
+            padx=20,
+            pady=7
+        )
+
+        tk.Label(
+            wrap,
+            text=text,
+            bg=SYSTEM_BG,
+            fg=MUTED,
+            font=(
+                "Segoe UI",
+                8
+            ),
+            padx=10,
+            pady=5
+        ).pack()
+
+        self.root.after(
+            20,
+            self.scroll_bottom
+        )
+
+    # ============================================================
+    # Send Message
+    # ============================================================
+
+    def send_message(self):
+        text = self.message_var.get().strip()
+
+        if not text:
+            return
+
+        if self.chat_mode == "private":
+            if not self.private_user:
+                messagebox.showinfo(
+                    "Private Chat",
+                    "Select a user first."
+                )
+                return
+
+            ok = self.send_json({
+                "type": "pm",
+                "to": self.private_user,
+                "message": text
+            })
+
+        else:
+            if not self.current_room:
+                messagebox.showinfo(
+                    "Room",
+                    "Join a room first."
+                )
+                return
+
+            ok = self.send_json({
+                "type": "msg",
+                "message": text
+            })
+
+        if ok:
+            self.message_var.set("")
+
+    # ============================================================
+    # Canvas
+    # ============================================================
+
+    def update_scrollregion(
+        self,
+        _event=None
+    ):
+        self.chat_canvas.configure(
+            scrollregion=self.chat_canvas.bbox(
+                "all"
+            )
+        )
+
+    def resize_messages_frame(
+        self,
+        event
+    ):
+        self.chat_canvas.itemconfigure(
+            self.messages_window,
+            width=event.width
+        )
 
     def scroll_bottom(self):
         self.chat_canvas.update_idletasks()
         self.chat_canvas.yview_moveto(1.0)
 
-    # ---------------- shutdown ----------------
+    # ============================================================
+    # Shutdown
+    # ============================================================
+
     def disconnect(self):
         self.running.clear()
+
         if self.sock:
             try:
-                self.sock.shutdown(socket.SHUT_RDWR)
+                self.sock.shutdown(
+                    socket.SHUT_RDWR
+                )
             except OSError:
                 pass
+
             try:
                 self.sock.close()
             except OSError:
                 pass
+
         self.sock = None
 
     def on_close(self):
         if self.sock:
             try:
-                self.send_json({"type": "quit"})
+                self.send_json({
+                    "type": "quit"
+                })
             except Exception:
                 pass
+
         self.disconnect()
         self.root.destroy()
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="TCP-Nexus visual client")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=5000)
+    parser = argparse.ArgumentParser(
+        description="TCP-Nexus professional GUI client"
+    )
+
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1"
+    )
+
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=5000
+    )
+
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+
     root = tk.Tk()
-    TCPNexusClient(root, host=args.host, port=args.port)
+
+    TCPNexusGUI(
+        root,
+        host=args.host,
+        port=args.port
+    )
+
     root.mainloop()
